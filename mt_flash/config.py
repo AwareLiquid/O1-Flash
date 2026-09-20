@@ -30,6 +30,11 @@ class FlashConfig:
     # Selective (input-dependent) decay: content decides persistence.
     # At init dt == 1 reproduces the static path exactly (strict generalisation).
     selective_decay: bool = False
+    # Bidirectional readout: the decision heads attend over a sequence whose
+    # every position sees the whole input (forward scan + reversed scan,
+    # shared weights — BiRNN style). The O(1) carried state remains the
+    # forward scan only, so streaming replay is unaffected.
+    bidirectional: bool = True
 
     # -- input encoding ------------------------------------------------
     vocab_size: int = 260               # byte-level tokenizer: 256 bytes + specials

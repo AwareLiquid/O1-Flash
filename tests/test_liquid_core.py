@@ -24,16 +24,21 @@ def test_state_size_flat_across_context_lengths():
 
 
 def test_streaming_prefix_equals_full():
-    """Incremental replay with carried state == one-shot over full prefix."""
+    """Incremental replay with carried state == one-shot over full prefix.
+
+    The equality contract is on the O(1) carried state h_last — the
+    sequence output y of a chunk only covers that chunk's positions.
+    """
     enc = _enc().eval()
     ids = torch.randint(0, 256, (1, 64))
     with torch.no_grad():
-        state_full, _ = enc(ids)
+        _, h_full = enc(ids)
         # replay in two chunks, threading h_prev
-        state_a, h_a = enc(ids[:, :32])
-        state_b, h_b = enc(ids[:, 32:], h_prev=h_a)
-        # final chunk's state must equal the full-prefix final state
-        assert (state_b - state_full).abs().max().item() < 1e-4
+        _, h_a = enc(ids[:, :32])
+        _, h_b = enc(ids[:, 32:], h_prev=h_a)
+        # carried state after chunk 2 == carried state after the full prefix
+        for hb, hf in zip(h_b, h_full):
+            assert (hb - hf).abs().max().item() < 1e-4
 
 
 def test_reset_gives_identical_output():

@@ -30,6 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .config import FlashConfig
+from .state_tokenizer import PAD_ID
 
 
 class MultiScaleLiquidBlock(nn.Module):
@@ -92,9 +93,17 @@ class MultiScaleLiquidBlock(nn.Module):
         return F.softplus(self.w_dt(u) + self.b_dt)  # (B, T, 1)
 
     def forward(self, x: torch.Tensor,
-                h_prev: torch.Tensor | None = None
+                h_prev: torch.Tensor | None = None,
+                pad_mask: torch.Tensor | None = None
                 ) -> tuple[torch.Tensor, torch.Tensor]:
-        """x: (B, T, D) -> (y: (B, T, D), h_last: (B, P, S, d))."""
+        """x: (B, T, D) -> (y: (B, T, D), h_last: (B, P, S, d)).
+
+        pad_mask: (B, T) bool, True = real token. Masked (pad) positions
+        leave the carried state untouched (decay=1, input=0), so padding
+        never pollutes the recurrence — measured: without this, variable
+        pad counts destroyed the decision signal (dept 0.48; with masking
+        or no padding, 1.0).
+        """
         B, T, _ = x.shape
         P, S, d = self.P, self.S, self.d
 
@@ -114,12 +123,16 @@ class MultiScaleLiquidBlock(nn.Module):
             decay = torch.exp(-self.dt / tau.view(1, 1, P, S, 1)
                               ).expand(B, T, P, S, 1)     # (B,T,P,S,1)
 
-        # Sequential scan (O(T) compute, O(1) state)
+        # Sequential scan (O(T) compute, O(1) state); masked positions
+        # carry the state through unchanged.
         h = torch.zeros(B, P, S, d, device=x.device, dtype=x.dtype)
         if h_prev is not None:
             h = h + h_prev
         for t in range(T):
-            h = decay[:, t] * h + (1.0 - decay[:, t]) * A[:, t]
+            h_t = decay[:, t] * h + (1.0 - decay[:, t]) * A[:, t]
+            if pad_mask is not None:
+                keep = pad_mask[:, t].view(B, 1, 1, 1)     # True = real
+                h = torch.where(keep, h_t, h)
 
         # Kappa-gated blend across scales: softmax over ladder weighted by
         # content gate, per (proto, dim)
@@ -148,14 +161,29 @@ class LiquidStateEncoder(nn.Module):
     def forward(self, ids: torch.Tensor,
                 h_prev: list[torch.Tensor] | None = None
                 ) -> tuple[torch.Tensor, list[torch.Tensor]]:
-        """ids: (B, T) -> (state: (B, D), h_last: list of (B,P,S,d))."""
+        """ids: (B, T) -> (y: (B, T, D*2) or (B,T,D), h_last: list of (B,P,S,d)).
+
+        y is the readout sequence. With cfg.bidirectional=True (default)
+        every position sees the whole input: the forward scan contributes
+        the past and a weight-shared reversed scan the future. h_last is
+        the forward O(1) carried state ONLY, so streaming replay equality
+        still holds on it.
+        """
         x = self.embedding(ids)
+        pad_mask = ids != PAD_ID
         h_last: list[torch.Tensor] = []
         for i, blk in enumerate(self.blocks):
-            x, h = blk(x, h_prev=h_prev[i] if h_prev is not None else None)
+            x, h = blk(x, h_prev=h_prev[i] if h_prev is not None else None,
+                       pad_mask=pad_mask)
             h_last.append(h)
-        state = self.norm(x[:, -1])  # final carried representation
-        return state, h_last
+        if self.cfg.bidirectional:
+            ids_r = torch.flip(ids, dims=[1])
+            x_r = self.embedding(ids_r)
+            mask_r = torch.flip(pad_mask, dims=[1])
+            for blk in self.blocks:              # weight-shared backward pass
+                x_r, _ = blk(x_r, h_prev=None, pad_mask=mask_r)
+            x = torch.cat([x, torch.flip(x_r, dims=[1])], dim=-1)
+        return x, h_last
 
     def reset_stream(self, h_last: list[torch.Tensor] | None) -> None:
         """Streaming hook kept explicit: callers pass h_prev=None to reset."""

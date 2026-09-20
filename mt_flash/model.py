@@ -25,11 +25,15 @@ class O1Flash(nn.Module):
             max_len=self.cfg.max_seq_len,
         )
 
+    def _ids_for(self, text: str) -> torch.Tensor:
+        """Encode one text to token ids (helper for batched training)."""
+        return torch.tensor(encode(text, self.cfg.max_seq_len),
+                            dtype=torch.long)
+
     def encode_state(self, text: str, h_prev: list[torch.Tensor] | None = None
                      ) -> tuple[torch.Tensor, list[torch.Tensor]]:
-        """Shared state encoded once; O(1) size regardless of text length."""
-        ids = torch.tensor([encode(text, self.cfg.max_seq_len)],
-                           dtype=torch.long)
+        """Encode the shared sequence once; h_last is the O(1) carried state."""
+        ids = self._ids_for(text).unsqueeze(0)
         return self.encoder(ids, h_prev=h_prev)
 
     @torch.no_grad()
@@ -38,12 +42,12 @@ class O1Flash(nn.Module):
                ) -> DecisionResponse:
         """Run the typed questions in parallel over the shared state."""
         self.eval()
-        state, h_last = self.encode_state(state_text, h_prev=h_prev)
-        answers = self.heads(state, questions)
-        resp = DecisionResponse(answers=answers)
-        return resp
+        y, _ = self.encoder(self._ids_for(state_text).unsqueeze(0),
+                            h_prev=h_prev)
+        answers = self.heads(y, questions)
+        return DecisionResponse(answers=answers)
 
     def forward(self, ids: torch.Tensor) -> torch.Tensor:
-        """Train path: return the final carried state (heads attach to it)."""
-        state, _ = self.encoder(ids)
-        return state
+        """Train path: return the sequence output (heads pool per question)."""
+        y, _ = self.encoder(ids)
+        return y
