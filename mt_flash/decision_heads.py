@@ -51,22 +51,23 @@ class ParallelDecisionHeads(nn.Module):
     def __init__(self, cfg: FlashConfig, embed: nn.Embedding,
                  tokenizer_encode, max_len: int):
         super().__init__()
-        D = cfg.d_model * (2 if cfg.bidirectional else 1)   # readout dim
+        rd = cfg.d_model * (2 if cfg.bidirectional else 1) \
+            + (cfg.d_model if cfg.hybrid_readout else 0)     # readout dim
         self.cfg = cfg
         self.embed = embed          # shared byte embedding (no recurrence)
         self.encode_fn = tokenizer_encode
         self.max_len = max_len
-        self.scale = D ** -0.5
+        self.scale = rd ** -0.5
 
-        self.attn_key = nn.Linear(D, D, bias=False)     # position keys
-        self.choice_attn = nn.Linear(D, D, bias=False)  # per-type position keys
-        self.score_attn = nn.Linear(D, D, bias=False)   # (no cross-question
-        self.prob_attn = nn.Linear(D, D, bias=False)    #  gradient interference)
-        self.query_proj = nn.Linear(cfg.d_model, D, bias=False)  # query -> readout dim
-        self.opt_proj = nn.Linear(cfg.d_model, D, bias=False)    # options -> readout dim
-        self.choice_proj = nn.Linear(D, D, bias=False)  # per-question scorer
-        self.score_proj = nn.Linear(D, cfg.max_score_levels)
-        self.prob_head = nn.Linear(D, 1)
+        self.attn_key = nn.Linear(rd, rd, bias=False)     # position keys
+        self.choice_attn = nn.Linear(rd, rd, bias=False)  # per-type position keys
+        self.score_attn = nn.Linear(rd, rd, bias=False)   # (no cross-question
+        self.prob_attn = nn.Linear(rd, rd, bias=False)    #  gradient interference)
+        self.query_proj = nn.Linear(cfg.d_model, rd, bias=False)  # query -> readout dim
+        self.opt_proj = nn.Linear(cfg.d_model, rd, bias=False)    # options -> readout dim
+        self.choice_proj = nn.Linear(rd, rd, bias=False)  # per-question scorer
+        self.score_proj = nn.Linear(rd, cfg.max_score_levels)
+        self.prob_head = nn.Linear(rd, 1)
 
     def _mean_embed(self, text: str, device: torch.device) -> torch.Tensor:
         ids = self.encode_fn(text, self.max_len)

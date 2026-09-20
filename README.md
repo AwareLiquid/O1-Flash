@@ -54,10 +54,13 @@ liquid state, sized for the edge instead of the cloud.
 
 ```bash
 pip install -r requirements.txt
-python -m pytest tests/ -q          # 15 tests
+python -m pytest tests/ -q          # 22 tests (joint-training test ~3 min)
 
 # smoke: one state, three typed questions, one parallel pass
 python -m mt_flash.smoke
+
+# decision bench: joint calibration training on the synthetic set
+python -m benchmarks.decision_bench
 ```
 
 ```python

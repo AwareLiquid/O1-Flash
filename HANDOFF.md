@@ -14,20 +14,19 @@
 |---|---|
 | 液态递归核独立移植（MTLNNLayerV2 数学） | `tests/test_liquid_core.py`：O(1) 状态平坦/流式前缀=全量/重置确定性/选择性衰减 init 恒等 |
 | 屏蔽扫描（pad 不污染状态） | 实测：无屏蔽时信号在前 0.48 → 屏蔽后 1.0（DESIGN §7） |
+| 混合读出（联合训练修复） | 联合 3 问题：纯液态 0.19-0.31 → 混合 0.73/0.81/1.0（DESIGN §7） |
 | 并行决策头（每问题独立读出，无跨问题通路） | `tests/test_decision_heads.py`：问题独立性/schema 有界/置信度=峰值度 |
-| 校准参考 + 单问题训练循环 | `tests/test_calibration.py` + `tests/test_train.py`：Brier/ECE 手算值 + 训练可学（dept 1.0） |
+| 校准参考 + 联合训练循环 | `tests/test_calibration.py` + `tests/test_train.py`：Brier/ECE 手算值 + 联合训练全问题过阈值 |
 | 级联路由 FastSlowRouter | `tests/test_cascade.py`：阈值分区/边界校验 |
 | 全测 | `pytest tests/ -q` → 22 passed |
 
 ## 2. 进行中 / 待办
 
-- [ ] **联合多问题训练（头号开放问题）**：液态核联合训练下早期信号学不会
-  （dept 0.19-0.31 vs 纯 MLP 基线 0.69，DESIGN §7 有完整实验矩阵）。
-  候选方向：每问题独立读出通道 / 对比损失 / Jev 式 listwise option-slot
 - [ ] Blelloch 并行扫描（长输入吞吐；数学等价，见 M1 pscan/chunkwise）
 - [ ] ONNX 导出（M1 `export.py` 5MB 唤醒词经验可直接迁移）
 - [ ] 真实决策基准（合成集只证明管线；真实路由/分类集 + ECE 报告）
 - [ ] 训练参考的数据管线化（无 pad 屏蔽之外的增强）
+- [ ] 混合读出的消融：原始嵌入并接是否可在流式下渐进式处理（当前仅 prefill）
 
 ## 3. 要避免的坑
 

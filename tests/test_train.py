@@ -1,8 +1,9 @@
-"""Training pipeline tests: single-question training learns; labels valid."""
+"""Training pipeline tests: JOINT multi-question training learns all
+questions (the hybrid-readout resolution of DESIGN §7)."""
 
 from mt_flash.config import o1_flash_tiny
 from mt_flash.model import O1Flash
-from mt_flash.train import make_question, make_synthetic_state, train_single
+from mt_flash.train import (default_questions, make_synthetic_state, train)
 
 
 def test_synthetic_state_has_valid_labels():
@@ -12,18 +13,25 @@ def test_synthetic_state_has_valid_labels():
     assert 0 <= dept < 4 and 0 <= sev < 4 and urgent in (0, 1)
 
 
-def test_single_question_training_learns():
-    """The pipeline trains end-to-end on ONE question: acc well above chance."""
+def test_joint_training_learns_all_questions():
+    """Joint calibration training: all three question types beat chance.
+
+    Chance: dept 0.25 (4-way), sev 0.25 (4-way), urgent 0.5 (binary).
+    Measured with hybrid readout: 0.73 / 0.81 / 1.0 at 600 steps.
+    """
     model = O1Flash(o1_flash_tiny())
-    m = train_single(model, make_question("dept"), steps=400, batch=32)
-    # chance = 0.25 (4-way dept)
+    m = train(model, steps=600, batch=32)
     assert m["dept_acc"] > 0.55
-    assert 0.0 <= m["dept_ece"] <= 1.0
+    assert m["sev_acc"] > 0.55
+    assert m["urgent_acc"] > 0.7
+    for k in ("dept", "sev", "urgent"):
+        assert 0.0 <= m[f"{k}_ece"] <= 1.0
 
 
-def test_make_question_types():
+def test_default_questions_are_typed():
     from mt_flash.schema import (ChoiceQuestion, ProbabilityQuestion,
                                  ScoreQuestion)
-    assert isinstance(make_question("dept"), ChoiceQuestion)
-    assert isinstance(make_question("sev"), ScoreQuestion)
-    assert isinstance(make_question("urgent"), ProbabilityQuestion)
+    qs = default_questions()
+    assert isinstance(qs[0], ChoiceQuestion)
+    assert isinstance(qs[1], ScoreQuestion)
+    assert isinstance(qs[2], ProbabilityQuestion)

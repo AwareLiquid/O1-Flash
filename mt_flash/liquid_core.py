@@ -183,6 +183,10 @@ class LiquidStateEncoder(nn.Module):
             for blk in self.blocks:              # weight-shared backward pass
                 x_r, _ = blk(x_r, h_prev=None, pad_mask=mask_r)
             x = torch.cat([x, torch.flip(x_r, dims=[1])], dim=-1)
+        if self.cfg.hybrid_readout:
+            # Direct token-level access alongside the liquid state (see
+            # config.hybrid_readout: the "exact recall" half of the hybrid).
+            x = torch.cat([x, self.embedding(ids)], dim=-1)
         return x, h_last
 
     def reset_stream(self, h_last: list[torch.Tensor] | None) -> None:

@@ -35,6 +35,13 @@ class FlashConfig:
     # shared weights — BiRNN style). The O(1) carried state remains the
     # forward scan only, so streaming replay is unaffected.
     bidirectional: bool = True
+    # Hybrid readout: concatenate the RAW byte embeddings alongside the
+    # liquid outputs. The liquid scan smears positions over time, which
+    # hurts exact content matching (measured: joint multi-task fails,
+    # DESIGN §7); raw-embedding access restores direct token-level
+    # matching — the "compressed state + exact recall" hybrid the M1 repo
+    # already validated in its HOLA-style family.
+    hybrid_readout: bool = True
 
     # -- input encoding ------------------------------------------------
     vocab_size: int = 260               # byte-level tokenizer: 256 bytes + specials

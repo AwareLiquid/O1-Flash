@@ -1,18 +1,10 @@
 """Training reference: synthetic decision tasks + calibration loop.
 
-Trains ONE typed question per call (fresh model recommended per
-question), with the calibration objective (Brier + decision CE) and ECE
-reporting. This proves the PIPELINE — state encode once, parallel heads,
-calibrated loss, ECE report — end to end.
-
-Why single-question training (measured, 2026-09-18, see DESIGN §7):
-the liquid recurrent encoder learns a single decision signal to ceiling
-(acc 1.0 on the synthetic set), but JOINT multi-question training on the
-shared liquid state fails to extract earlier signals (dept 0.27 vs 0.69
-for a plain mean-pool MLP baseline under the same budget). Multi-task
-joint training on the liquid core is the repo's top open research
-problem; single-question training + parallel inference remains fully
-functional — the "parallel" property is an inference property.
+Trains all typed questions JOINTLY on the shared encoder with the
+calibration objective (Brier + decision CE) and ECE reporting. This
+proves the PIPELINE — state encode once, parallel heads, calibrated
+loss, ECE report — end to end, in the mode the parallel-readout design
+is meant for.
 
 The synthetic tasks are deliberately linear-separable: the point is the
 pipeline, not decision skill.
@@ -27,7 +19,8 @@ import torch.nn as nn
 
 from .calibration import calibration_step, expected_calibration_error
 from .model import O1Flash
-from .schema import Question
+from .schema import (ChoiceQuestion, ProbabilityQuestion, Question,
+                     ScoreQuestion)
 
 DEPT_OPTIONS = ("billing", "infra", "sales", "other")
 SEV_LEVELS = ("low", "mid", "high", "critical")
@@ -52,7 +45,6 @@ def make_synthetic_state(rng: random.Random) -> tuple[str, int, int, int]:
 
 def make_question(kind: str) -> Question:
     """One typed question for the synthetic state (dept/sev/urgent)."""
-    from .schema import (ChoiceQuestion, ProbabilityQuestion, ScoreQuestion)
     if kind == "dept":
         return ChoiceQuestion(id="dept", options=DEPT_OPTIONS)
     if kind == "sev":
@@ -62,15 +54,18 @@ def make_question(kind: str) -> Question:
     raise ValueError(f"unknown kind: {kind}")
 
 
-def _label_idx(kind: str, row: tuple[str, int, int, int]) -> int:
-    return {"dept": 1, "sev": 2, "urgent": 3}[kind]
+def default_questions() -> list[Question]:
+    return [make_question(k) for k in ("dept", "sev", "urgent")]
 
 
-def train_single(model: O1Flash, question: Question, steps: int = 400,
-                 batch: int = 32, lr: float = 3e-3, seed: int = 0,
-                 log_every: int | None = None) -> dict[str, float]:
-    """Train ONE typed question on synthetic states; returns acc + ECE."""
-    kind = question.id
+_LABEL = {"dept": 1, "sev": 2, "urgent": 3}
+
+
+def train(model: O1Flash, questions: list[Question] | None = None,
+          steps: int = 600, batch: int = 32, lr: float = 3e-3,
+          seed: int = 0, log_every: int | None = None) -> dict[str, float]:
+    """Joint calibration training over all questions; returns metrics."""
+    questions = questions or default_questions()
     rng = random.Random(seed)
     torch.manual_seed(seed)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -84,9 +79,12 @@ def train_single(model: O1Flash, question: Question, steps: int = 400,
         )
         y = model(ids)
         pad_mask = ids != 256
-        probs = model.heads.train_forward(y, [question], pad_mask=pad_mask)
-        targets = torch.tensor([r[_label_idx(kind, r)] for r in rows])
-        loss = calibration_step(probs[kind], targets)
+        probs = model.heads.train_forward(y, questions, pad_mask=pad_mask)
+        loss = sum(
+            calibration_step(probs[q.id],
+                             torch.tensor([r[_LABEL[q.id]] for r in rows]))
+            for q in questions
+        )
         opt.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -104,9 +102,11 @@ def train_single(model: O1Flash, question: Question, steps: int = 400,
     with torch.no_grad():
         y = model(ids)
         pad_mask = ids != 256
-        probs = model.heads.train_forward(y, [question], pad_mask=pad_mask)
-    targets = torch.tensor([r[_label_idx(kind, r)] for r in rows])
-    p = probs[kind]
-    acc = (p.argmax(-1) == targets).float().mean().item()
-    return {f"{kind}_acc": acc,
-            f"{kind}_ece": expected_calibration_error(p, targets)}
+        probs = model.heads.train_forward(y, questions, pad_mask=pad_mask)
+    out: dict[str, float] = {}
+    for q in questions:
+        targets = torch.tensor([r[_LABEL[q.id]] for r in rows])
+        p = probs[q.id]
+        out[f"{q.id}_acc"] = (p.argmax(-1) == targets).float().mean().item()
+        out[f"{q.id}_ece"] = expected_calibration_error(p, targets)
+    return out
