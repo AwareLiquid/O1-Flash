@@ -42,6 +42,11 @@ class FlashConfig:
     # matching — the "compressed state + exact recall" hybrid the M1 repo
     # already validated in its HOLA-style family.
     hybrid_readout: bool = True
+    # Vectorised chunked scan for the static-decay path (Toeplitz
+    # convolution per chunk; ~Cx fewer Python iterations). Numerically
+    # equivalent to the sequential loop; disable to use the exact
+    # sequential path (tests compare the two).
+    use_chunked_scan: bool = True
 
     # -- input encoding ------------------------------------------------
     vocab_size: int = 260               # byte-level tokenizer: 256 bytes + specials

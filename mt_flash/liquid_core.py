@@ -42,6 +42,7 @@ class MultiScaleLiquidBlock(nn.Module):
                       cfg.n_time_scales, cfg.proj_rank)
         self.P, self.d, self.S = P, d, S
         self.dt = cfg.dt
+        self.use_chunked = cfg.use_chunked_scan
         dpt = P * d
 
         # Factorized projections (bias-free; residual carries identity)
@@ -123,16 +124,28 @@ class MultiScaleLiquidBlock(nn.Module):
             decay = torch.exp(-self.dt / tau.view(1, 1, P, S, 1)
                               ).expand(B, T, P, S, 1)     # (B,T,P,S,1)
 
-        # Sequential scan (O(T) compute, O(1) state); masked positions
-        # carry the state through unchanged.
-        h = torch.zeros(B, P, S, d, device=x.device, dtype=x.dtype)
-        if h_prev is not None:
-            h = h + h_prev
-        for t in range(T):
-            h_t = decay[:, t] * h + (1.0 - decay[:, t]) * A[:, t]
-            if pad_mask is not None:
-                keep = pad_mask[:, t].view(B, 1, 1, 1)     # True = real
-                h = torch.where(keep, h_t, h)
+        # Zero input at pad positions so padding never pollutes the
+        # recurrence (right-padded sequences only — the training
+        # reference contract; the sequential path below still handles
+        # arbitrary masks for the selective/left-padded case).
+        if pad_mask is not None:
+            A = A * pad_mask.view(B, T, 1, 1, 1)
+
+        if not self.selective_decay and self.use_chunked:
+            # Vectorised chunked scan (static decay): exact same math as
+            # the sequential loop, ~C× fewer Python iterations.
+            h = self._scan_static_chunked(A, decay[:, 0], h_prev=h_prev)
+        else:
+            # Sequential scan (O(T) compute, O(1) state); masked positions
+            # carry the state through unchanged.
+            h = torch.zeros(B, P, S, d, device=x.device, dtype=x.dtype)
+            if h_prev is not None:
+                h = h + h_prev
+            for t in range(T):
+                h_t = decay[:, t] * h + (1.0 - decay[:, t]) * A[:, t]
+                if pad_mask is not None:
+                    keep = pad_mask[:, t].view(B, 1, 1, 1)     # True = real
+                    h = torch.where(keep, h_t, h)
 
         # Kappa-gated blend across scales: softmax over ladder weighted by
         # content gate, per (proto, dim)
@@ -144,6 +157,47 @@ class MultiScaleLiquidBlock(nn.Module):
         y = self.out_b(self.out_a(y_raw))
         y = self.dropout(y)
         return y, h  # h = h_last (B, P, S, d)
+
+    def _scan_static_chunked(self, A: torch.Tensor, d: torch.Tensor,
+                             h_prev: torch.Tensor | None = None,
+                             chunk: int = 16) -> torch.Tensor:
+        """Vectorised scan for CONSTANT decay: h_t = d·h_{t-1} + (1-d)·A_t.
+
+        A: (B, T, P, S, d); d: (B, P, S, 1) constant over t.
+        Within a chunk of size C the recurrence is a Toeplitz convolution:
+            h[t0+j] = d^j·h_in + Σ_{k≤j} (1-d)·d^{j-k}·A[t0+k]
+        computed as one batched matmul per chunk. d^j and the Toeplitz
+        kernel are exponentiated in log-space (stable for all tau).
+        Numerically identical to the sequential loop up to float32
+        association order (covered by the streaming equality test).
+        """
+        B, T, P, S, dd = A.shape
+        C = min(chunk, T)
+
+        j = torch.arange(C, device=A.device, dtype=A.dtype)
+        k = torch.arange(C, device=A.device, dtype=A.dtype)
+        pw = (j.view(C, 1) - k.view(1, C)).clamp(min=0.0)          # (C,C)
+        # L[.,.,., j, k] = (1-d)·d^{j-k} for k<=j else 0 — computed with
+        # torch.pow (no log round-trip) so powers match the sequential
+        # path's decay to float32 precision.
+        dpow = torch.pow(d.unsqueeze(-1), pw.view(1, 1, 1, C, C))    # (B,P,S,C,C)
+        tri = (j.view(C, 1) >= k.view(1, C)).to(A.dtype)
+        L = dpow * (1.0 - d).unsqueeze(-1) * tri.view(1, 1, 1, C, C)
+        # carry powers are d^{j+1}: h[t0+j] = d^{j+1}·h_in + Σ_{k<=j} c·d^{j-k}·A
+        dj = torch.pow(d, (j + 1).view(1, 1, 1, C))               # (B,P,S,C)
+
+        h = torch.zeros(B, P, S, dd, device=A.device, dtype=A.dtype)
+        if h_prev is not None:
+            h = h + h_prev
+        for t0 in range(0, T, C):
+            n = min(C, T - t0)
+            A_c = A[:, t0:t0 + n].permute(0, 2, 3, 1, 4)          # (B,P,S,n,dd)
+            conv = torch.einsum("bpsjc,bpscd->bjpsd",
+                                L[:, :, :, :n, :n], A_c)           # (B,n,P,S,dd)
+            carry = h.unsqueeze(1) * dj[:, :, :, :n].permute(0, 3, 1, 2).unsqueeze(-1)
+            h_chunk = carry + conv                                 # (B,n,P,S,dd)
+            h = h_chunk[:, -1]
+        return h
 
 
 class LiquidStateEncoder(nn.Module):

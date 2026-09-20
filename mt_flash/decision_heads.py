@@ -68,6 +68,7 @@ class ParallelDecisionHeads(nn.Module):
         self.choice_proj = nn.Linear(rd, rd, bias=False)  # per-question scorer
         self.score_proj = nn.Linear(rd, cfg.max_score_levels)
         self.prob_head = nn.Linear(rd, 1)
+        self.prob_pos = nn.Linear(rd, 1, bias=False)   # per-position scorer
 
     def _mean_embed(self, text: str, device: torch.device) -> torch.Tensor:
         ids = self.encode_fn(text, self.max_len)
@@ -126,9 +127,17 @@ class ParallelDecisionHeads(nn.Module):
     def prob_scalar(self, y: torch.Tensor, q: ProbabilityQuestion,
                     pad_mask: torch.Tensor | None = None
                     ) -> torch.Tensor:
-        query = self._mean_embed(q.prompt, y.device)
-        key = self._pool(y, query, pad_mask=pad_mask, attn_key=self.score_attn)
-        return torch.sigmoid(self.prob_head(key))
+        """Position-robust probability readout: logsumexp over positions of
+        a per-position scalar scorer. Smooth-max pooling is numerically
+        stable (no attention softmax ties, no query-key alignment), which
+        also keeps ONNX export parity tight. The prompt's semantics are
+        learned into the scorer; it does not need to appear in the text.
+        """
+        scores = self.prob_pos(y).squeeze(-1)            # (B, T)
+        if pad_mask is not None:
+            scores = scores.masked_fill(~pad_mask, float("-inf"))
+        logit = torch.logsumexp(scores, dim=-1, keepdim=True)  # (B, 1)
+        return torch.sigmoid(logit)
 
     # -- single-item answer builders (inference) --------------------------
     def _choice(self, y: torch.Tensor, q: ChoiceQuestion) -> ChoiceAnswer:

@@ -18,13 +18,16 @@
 | 并行决策头（每问题独立读出，无跨问题通路） | `tests/test_decision_heads.py`：问题独立性/schema 有界/置信度=峰值度 |
 | 校准参考 + 联合训练循环 | `tests/test_calibration.py` + `tests/test_train.py`：Brier/ECE 手算值 + 联合训练全问题过阈值 |
 | 级联路由 FastSlowRouter | `tests/test_cascade.py`：阈值分区/边界校验 |
-| 全测 | `pytest tests/ -q` → 22 passed |
+| 分块向量化扫描（静态衰减） | `tests/test_liquid_core.py::test_chunked_scan_matches_sequential`：与顺序循环等价（T=32 内 1e-3） |
+| ONNX 固定 schema 导出 | `tests/test_export_onnx.py`：onnxruntime 实际推理与 PyTorch 决策级一致 |
+| 真实基准（模板改写 + 留出集） | `tests/test_realistic_bench.py`：留出组合泛化超随机基线 |
+| 全测 | `pytest tests/ -q` → 26 passed |
 
 ## 2. 进行中 / 待办
 
-- [ ] Blelloch 并行扫描（长输入吞吐；数学等价，见 M1 pscan/chunkwise）
-- [ ] ONNX 导出（M1 `export.py` 5MB 唤醒词经验可直接迁移）
-- [ ] 真实决策基准（合成集只证明管线；真实路由/分类集 + ECE 报告）
+- [ ] 真实数据决策基准（模板库仍是合成；OOV 泛化需真实票集）
+- [ ] 选择性衰减的向量化扫描（当前 selective 路径仍走顺序循环）
+- [ ] ONNX 导出官方部署说明（量化 int8、多平台 runtime 示例）
 - [ ] 训练参考的数据管线化（无 pad 屏蔽之外的增强）
 - [ ] 混合读出的消融：原始嵌入并接是否可在流式下渐进式处理（当前仅 prefill）
 
