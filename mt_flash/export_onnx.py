@@ -57,17 +57,20 @@ class FixedSchemaModel(nn.Module):
             if isinstance(q, ChoiceQuestion):
                 opts = getattr(heads, f"_opt_{q.id}")
                 sim = torch.einsum("nd,btd->bnt", opts[0], y) * heads.scale
-                sim = sim.masked_fill(~pad_mask.unsqueeze(1), float("-inf"))
-                out.append(torch.softmax(torch.logsumexp(sim, -1), dim=-1))
+                sim = sim.masked_fill(~pad_mask.unsqueeze(1), 0.0)
+                denom = pad_mask.sum(1, keepdim=True).clamp(min=1)
+                out.append(torch.softmax(sim.sum(-1) / denom, dim=-1))
             elif isinstance(q, ScoreQuestion):
                 opts = getattr(heads, f"_opt_{q.id}")
                 sim = torch.einsum("nd,btd->bnt", opts[0], y) * heads.scale
-                sim = sim.masked_fill(~pad_mask.unsqueeze(1), float("-inf"))
-                out.append(torch.softmax(torch.logsumexp(sim, -1), dim=-1))
+                sim = sim.masked_fill(~pad_mask.unsqueeze(1), 0.0)
+                denom = pad_mask.sum(1, keepdim=True).clamp(min=1)
+                out.append(torch.softmax(sim.sum(-1) / denom, dim=-1))
             elif isinstance(q, ProbabilityQuestion):
                 scores = heads.prob_pos(y).squeeze(-1)      # (B, T)
-                scores = scores.masked_fill(~pad_mask, float("-inf"))
-                logit = torch.logsumexp(scores, dim=-1, keepdim=True)
+                scores = scores.masked_fill(~pad_mask, 0.0)
+                denom = pad_mask.sum(1, keepdim=True).clamp(min=1)
+                logit = scores.sum(-1, keepdim=True) / denom
                 p = torch.sigmoid(logit)
                 out.append(torch.cat([p, 1.0 - p], dim=-1))
         return tuple(out)

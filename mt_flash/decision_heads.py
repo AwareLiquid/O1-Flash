@@ -102,16 +102,23 @@ class ParallelDecisionHeads(nn.Module):
     def choice_probs(self, y: torch.Tensor, q: ChoiceQuestion,
                      pad_mask: torch.Tensor | None = None
                      ) -> torch.Tensor:
-        """Option-matching readout: score each option by logsumexp of its
-        similarity across positions (soft-max over the sequence, smooth
-        gradients to every position). Position-robust: the option word
-        appearing anywhere drives its score; no attention routing.
+        """Option-matching readout, MEAN-pooled over positions.
+
+        Measured readout-variant comparison (joint synthetic bench,
+        600 steps): mean-pool 0.977/0.973/1.0 vs logsumexp 0.730/0.922
+        vs max-pool 0.453/0.609. Peak-selection (logsumexp/max) is
+        fooled by distractor phrases creating spurious peaks; uniform
+        mean-pooling matches the per-class linear-head ceiling while
+        keeping option-based (schema-bounded) scoring.
         """
         opts = self._embed_options(q.options, y.device)     # (1, N, D)
         sim = torch.einsum("nd,btd->bnt", opts[0], y) * self.scale  # (B,N,T)
         if pad_mask is not None:
-            sim = sim.masked_fill(~pad_mask.unsqueeze(1), float("-inf"))
-        scores = torch.logsumexp(sim, dim=-1)               # (B, N)
+            sim = sim.masked_fill(~pad_mask.unsqueeze(1), 0.0)
+            denom = pad_mask.sum(dim=1, keepdim=True).clamp(min=1)
+        else:
+            denom = y.shape[1]
+        scores = sim.sum(dim=-1) / denom                    # (B, N)
         return F.softmax(scores, dim=-1)
 
     def score_probs(self, y: torch.Tensor, q: ScoreQuestion,
@@ -120,23 +127,30 @@ class ParallelDecisionHeads(nn.Module):
         opts = self._embed_options(q.levels, y.device)
         sim = torch.einsum("nd,btd->bnt", opts[0], y) * self.scale
         if pad_mask is not None:
-            sim = sim.masked_fill(~pad_mask.unsqueeze(1), float("-inf"))
-        scores = torch.logsumexp(sim, dim=-1)
+            sim = sim.masked_fill(~pad_mask.unsqueeze(1), 0.0)
+            denom = pad_mask.sum(dim=1, keepdim=True).clamp(min=1)
+        else:
+            denom = y.shape[1]
+        scores = sim.sum(dim=-1) / denom
         return F.softmax(scores, dim=-1)
 
     def prob_scalar(self, y: torch.Tensor, q: ProbabilityQuestion,
                     pad_mask: torch.Tensor | None = None
                     ) -> torch.Tensor:
-        """Position-robust probability readout: logsumexp over positions of
-        a per-position scalar scorer. Smooth-max pooling is numerically
-        stable (no attention softmax ties, no query-key alignment), which
-        also keeps ONNX export parity tight. The prompt's semantics are
-        learned into the scorer; it does not need to appear in the text.
+        """Position-robust probability readout: MEAN-pool of a per-position
+        scalar scorer. Measured: logsumexp of the scorer is fooled by
+        spurious peaks (urgent collapsed to base-rate 0.54 at default
+        config); mean-pool reaches 0.992 — same finding as the choice
+        head. The prompt's semantics are learned into the scorer; it does
+        not need to appear in the text.
         """
         scores = self.prob_pos(y).squeeze(-1)            # (B, T)
         if pad_mask is not None:
-            scores = scores.masked_fill(~pad_mask, float("-inf"))
-        logit = torch.logsumexp(scores, dim=-1, keepdim=True)  # (B, 1)
+            scores = scores.masked_fill(~pad_mask, 0.0)
+            denom = pad_mask.sum(dim=1, keepdim=True).clamp(min=1)
+        else:
+            denom = y.shape[1]
+        logit = scores.sum(dim=-1, keepdim=True) / denom  # (B, 1)
         return torch.sigmoid(logit)
 
     # -- single-item answer builders (inference) --------------------------

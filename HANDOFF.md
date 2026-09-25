@@ -15,6 +15,7 @@
 | 液态递归核独立移植（MTLNNLayerV2 数学） | `tests/test_liquid_core.py`：O(1) 状态平坦/流式前缀=全量/重置确定性/选择性衰减 init 恒等 |
 | 屏蔽扫描（pad 不污染状态） | 实测：无屏蔽时信号在前 0.48 → 屏蔽后 1.0（DESIGN §7） |
 | 混合读出（联合训练修复） | 联合 3 问题：纯液态 0.19-0.31 → 混合 0.73/0.81/1.0（DESIGN §7） |
+| **mean-pool 读出定型（2026-09-20）** | 变体对比见 DESIGN §8：mean-pool 0.977/0.973/1.0；default 配置 dept/sev 1.0、urgent 0.992 |
 | 并行决策头（每问题独立读出，无跨问题通路） | `tests/test_decision_heads.py`：问题独立性/schema 有界/置信度=峰值度 |
 | 校准参考 + 联合训练循环 | `tests/test_calibration.py` + `tests/test_train.py`：Brier/ECE 手算值 + 联合训练全问题过阈值 |
 | 级联路由 FastSlowRouter | `tests/test_cascade.py`：阈值分区/边界校验 |
