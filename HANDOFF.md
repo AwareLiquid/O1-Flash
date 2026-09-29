@@ -22,6 +22,7 @@
 | 分块向量化扫描（静态衰减） | `tests/test_liquid_core.py::test_chunked_scan_matches_sequential`：与顺序循环等价（T=32 内 1e-3） |
 | ONNX 固定 schema 导出 | `tests/test_export_onnx.py`：onnxruntime 实际推理与 PyTorch 决策级一致 |
 | 真实基准（模板改写 + 留出集） | `tests/test_realistic_bench.py`：留出组合泛化超随机基线 |
+| **banking77 真实数据训练（2026-09-28）** | `benchmarks/real_data_bench.py`（GPU 服务器 A100）：**77 类意图路由 acc 23.28%**（随机 1.3%，18×），4.53M 参数 1500 步，loss 4.34→4.15 持续下降；ECE 0.464（诚实：校准差，需更长训练/温度缩放） |
 | 全测 | `pytest tests/ -q` → 26 passed |
 
 ## 2. 进行中 / 待办
