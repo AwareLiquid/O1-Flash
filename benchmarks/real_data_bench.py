@@ -59,8 +59,25 @@ def load_banking77() -> tuple[list[tuple[str, int]], list[tuple[str, int]],
     return train, test, cats
 
 
+def fit_temperature(probs: torch.Tensor, targets: torch.Tensor) -> float:
+    """Post-hoc temperature: minimise NLL on the calibration half."""
+    logits = torch.log(probs.clamp_min(1e-9))
+    log_T = torch.zeros(1, requires_grad=True)
+    opt = torch.optim.LBFGS([log_T], lr=0.1, max_iter=50)
+
+    def closure():
+        opt.zero_grad()
+        loss = torch.nn.functional.cross_entropy(logits / log_T.exp(), targets)
+        loss.backward()
+        return loss
+
+    opt.step(closure)
+    return float(log_T.exp().item())
+
+
 def train_banking77(steps: int = 1500, batch: int = 32, n_train: int | None = None,
-                    seed: int = 0, log_every: int | None = 300
+                    seed: int = 0, log_every: int | None = 300,
+                    lr: float = 1e-3
                     ) -> dict[str, float]:
     train, test, cats = load_banking77()
     if n_train:
@@ -70,7 +87,7 @@ def train_banking77(steps: int = 1500, batch: int = 32, n_train: int | None = No
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = O1Flash(FlashConfig()).to(device)
     torch.manual_seed(seed)
-    opt = torch.optim.AdamW(model.parameters(), lr=3e-3)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr)
     model.train()
     import random
     rng = random.Random(seed)
@@ -92,7 +109,11 @@ def train_banking77(steps: int = 1500, batch: int = 32, n_train: int | None = No
         if log_every and (step + 1) % log_every == 0:
             print(f"step {step + 1:5d}  loss {loss.item():.4f}")
 
-    # -- official test split --------------------------------------------
+    # -- checkpoint -----------------------------------------------------
+    ckpt_path = os.path.join(tempfile.gettempdir(), "o1flash_banking77.pt")
+    torch.save({"model": model.state_dict(), "cats": list(cats)}, ckpt_path)
+
+    # -- official test split: calib half + eval half (temperature scaling)
     model.eval()
     test_ids = torch.nn.utils.rnn.pad_sequence(
         [model._ids_for(r[0]) for r in test],
@@ -108,8 +129,19 @@ def train_banking77(steps: int = 1500, batch: int = 32, n_train: int | None = No
         all_probs.append(p.cpu())
     probs = torch.cat(all_probs, dim=0)
     acc = (probs.argmax(-1) == test_t).float().mean().item()
-    ece = expected_calibration_error(probs, test_t)
-    return {"acc": acc, "ece": ece, "n_params": sum(p.numel() for p in model.parameters()),
+
+    half = len(test_t) // 2
+    cal_p, cal_t = probs[:half], test_t[:half]
+    ev_p, ev_t = probs[half:], test_t[half:]
+
+    ece_before = expected_calibration_error(ev_p, ev_t)
+    T = fit_temperature(cal_p, cal_t)
+    cal_probs = torch.softmax(torch.log(cal_p.clamp_min(1e-9)) / T, dim=-1)
+    ev_probs = torch.softmax(torch.log(ev_p.clamp_min(1e-9)) / T, dim=-1)
+    ece_after = expected_calibration_error(ev_probs, ev_t)
+    return {"acc": acc, "ece": ece_before, "ece_calibrated": ece_after,
+            "temperature": float(T),
+            "n_params": sum(p.numel() for p in model.parameters()),
             "n_test": len(test), "n_classes": len(cats)}
 
 
@@ -118,9 +150,14 @@ if __name__ == "__main__":
     ap.add_argument("--steps", type=int, default=1500)
     ap.add_argument("--n_train", type=int, default=None)
     ap.add_argument("--batch", type=int, default=32)
+    ap.add_argument("--lr", type=float, default=1e-3,
+                    help="3e-3 diverges under GPU contention (10-04); "
+                         "1e-3 is the stability-first default")
     args = ap.parse_args()
     print("banking77 intent routing — real-data training (default config)")
-    m = train_banking77(steps=args.steps, n_train=args.n_train, batch=args.batch)
+    m = train_banking77(steps=args.steps, n_train=args.n_train, batch=args.batch, lr=args.lr)
     print(f"\n=== banking77 (77-way, chance 1.3%) ===")
     print(f"params {m['n_params']/1e6:.2f}M  n_test {m['n_test']}  "
           f"acc {m['acc']:.4f}  ece {m['ece']:.3f}")
+    print(f"temperature {m['temperature']:.3f}  "
+          f"ece calibrated {m['ece_calibrated']:.3f}")
