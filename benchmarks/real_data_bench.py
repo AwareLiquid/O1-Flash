@@ -77,7 +77,8 @@ def fit_temperature(probs: torch.Tensor, targets: torch.Tensor) -> float:
 
 def train_banking77(steps: int = 1500, batch: int = 32, n_train: int | None = None,
                     seed: int = 0, log_every: int | None = 300,
-                    lr: float = 1e-3
+                    lr: float = 1e-3, warmup: int = 0,
+                    min_lr_ratio: float = 0.1
                     ) -> dict[str, float]:
     train, test, cats = load_banking77()
     if n_train:
@@ -89,10 +90,22 @@ def train_banking77(steps: int = 1500, batch: int = 32, n_train: int | None = No
     torch.manual_seed(seed)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     model.train()
+    import math
     import random
     rng = random.Random(seed)
 
     for step in range(steps):
+        # LR schedule: linear warmup then cosine decay (stability under
+        # GPU contention; see HANDOFF "lr 调度" note).
+        if warmup > 0 and step < warmup:
+            cur_lr = lr * (step + 1) / warmup
+        else:
+            prog = (step - warmup) / max(1, steps - warmup)
+            prog = min(1.0, max(0.0, prog))
+            cur_lr = lr * (min_lr_ratio +
+                           (1 - min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * prog)))
+        for g in opt.param_groups:
+            g["lr"] = cur_lr
         rows = rng.sample(train, batch)
         ids = torch.nn.utils.rnn.pad_sequence(
             [model._ids_for(r[0]) for r in rows],
@@ -153,9 +166,14 @@ if __name__ == "__main__":
     ap.add_argument("--lr", type=float, default=1e-3,
                     help="3e-3 diverges under GPU contention (10-04); "
                          "1e-3 is the stability-first default")
+    ap.add_argument("--warmup", type=int, default=0,
+                    help="linear warmup steps (0 = off)")
+    ap.add_argument("--min-lr-ratio", type=float, default=0.1,
+                    help="cosine decay floor as a fraction of --lr")
     args = ap.parse_args()
     print("banking77 intent routing — real-data training (default config)")
-    m = train_banking77(steps=args.steps, n_train=args.n_train, batch=args.batch, lr=args.lr)
+    m = train_banking77(steps=args.steps, n_train=args.n_train, batch=args.batch, lr=args.lr,
+                           warmup=args.warmup, min_lr_ratio=args.min_lr_ratio)
     print(f"\n=== banking77 (77-way, chance 1.3%) ===")
     print(f"params {m['n_params']/1e6:.2f}M  n_test {m['n_test']}  "
           f"acc {m['acc']:.4f}  ece {m['ece']:.3f}")
