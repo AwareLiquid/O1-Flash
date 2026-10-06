@@ -39,16 +39,32 @@ def core_text(row: dict) -> str:
 
 @torch.no_grad()
 def embed_options(heads, rows: list[dict], device) -> tuple[torch.Tensor, torch.Tensor]:
+    """Batched option embedding: one pad+embed+pool+proj for all B×K options."""
+    texts, lengths, index = [], [], []
+    for b, r in enumerate(rows):
+        for k, lab in enumerate(r["labels"]):
+            ids = heads.encode_fn(option_text(r, lab), heads.max_len)
+            texts.append(torch.tensor(ids, dtype=torch.long))
+            lengths.append(len(ids))
+            index.append((b, k))
+    padded = torch.nn.utils.rnn.pad_sequence(texts, batch_first=True,
+                                             padding_value=0).to(device)
+    emb = heads.embed(padded)                             # (N, L, d)
+    length_mask = torch.zeros_like(padded, dtype=torch.bool)
+    for i, length in enumerate(lengths):
+        length_mask[i, :length] = True
+    mask = length_mask.unsqueeze(-1).float()
+    pooled = (emb * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+    projected = heads.opt_proj(pooled)                    # (N, rd)
+
     k_max = max(len(r["labels"]) for r in rows)
     dim = heads.opt_proj.out_features
     opts = torch.zeros(len(rows), k_max, dim, device=device)
-    mask = torch.zeros(len(rows), k_max, dtype=torch.bool, device=device)
-    for b, r in enumerate(rows):
-        for k, lab in enumerate(r["labels"]):
-            opts[b, k] = heads.opt_proj(
-                heads._mean_embed(option_text(r, lab), device))
-            mask[b, k] = True
-    return opts, mask
+    opt_mask = torch.zeros(len(rows), k_max, dtype=torch.bool, device=device)
+    for n, (b, k) in enumerate(index):
+        opts[b, k] = projected[n]
+        opt_mask[b, k] = True
+    return opts, opt_mask
 
 
 def decision_scores(heads, y: torch.Tensor, opts: torch.Tensor,
@@ -97,6 +113,8 @@ def main() -> None:
     ap.add_argument("--out", default="checkpoints/decision_v1.pt")
     ap.add_argument("--val-frac", type=float, default=0.02)
     ap.add_argument("--val-every", type=int, default=5000)
+    ap.add_argument("--save-every", type=int, default=2000,
+                    help="% val_every 的倍数处落盘（0 = 只在结尾）")
     ap.add_argument("--log-every", type=int, default=500)
     args = ap.parse_args()
 
@@ -140,11 +158,15 @@ def main() -> None:
         if (step + 1) % args.val_every == 0 or step + 1 == args.steps:
             acc = evaluate(model, val, device)
             print(f"  [val] step {step+1} acc {acc:.4f}", flush=True)
+            if args.save_every and (step + 1) % args.save_every == 0:
+                os.makedirs(os.path.dirname(args.out), exist_ok=True)
+                torch.save({"model": model.state_dict(), "steps": step + 1,
+                            "corpus": args.corpus, "val_acc": acc}, args.out)
+                print(f"  [saved] {args.out} @ step {step+1}", flush=True)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    torch.save({"model": model.state_dict(),
-                "config": FlashConfig().__dict__ if hasattr(FlashConfig(), "__dict__") else {},
-                "steps": args.steps, "corpus": args.corpus}, args.out)
+    torch.save({"model": model.state_dict(), "steps": args.steps,
+                "corpus": args.corpus}, args.out)
     print("saved", args.out)
 
 
