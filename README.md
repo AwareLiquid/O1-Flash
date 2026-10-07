@@ -42,13 +42,37 @@ liquid state, sized for the edge instead of the cloud.
 
 **Not proven (no trained checkpoint yet):**
 
-- No decision-quality numbers. The encoder is the O-series liquid core
-  ported from M1 (`mt_lnn/mt_lnn_v2.py` MTLNNLayerV2 math), but no weights
-  ship in this repo. This is the architecture + training reference, same
-  discipline as M2's DPO/GRPO reference.
+- The decision head ships as trained weights for the JevBench experiment
+  (`docs/JEVBENCH_RESULTS.md`) but ships **no product checkpoint** in this
+  repo. The encoder is the O-series liquid core ported from M1
+  (`mt_lnn/mt_lnn_v2.py` MTLNNLayerV2 math). This is the architecture +
+  training reference, same discipline as M2's DPO/GRPO reference.
 - No comparison against Jev's published workflow accuracy (67.8%).
 - Calibration claims are reference-level: the recipe exists and is tested
   on synthetic data, but RLCD itself is TypeSafe's unpublished method.
+
+## Benchmarks — official JevBench harness (2026-10)
+
+Measured through **Benchmark Heaven's open JevBench harness**
+(`github.com/fstandhartinger/jevbench`): the model serves its own
+probability distribution over the exact label set on a native
+`/v1/systemone` endpoint; scoring, schema validation and latency come from
+the official scorer. Public tiers: 48 easy + 72 original decisions.
+
+| model | raw acc | ECE | p50 | Speed axis* |
+|---|---|---|---|---|
+| M2-2B SFT (byte-level 2B) | 35.8% | 0.34–0.50 | 0.71–0.92 s | ~56 |
+| **O1-Flash decision head** (4.5M, single forward) | 27.1% | 0.41–0.43 | **16–21 ms** | **~100 (ceiling)** |
+
+\* official formula `100 − 20·log10(p50/0.1s)`, capped at 100.
+
+**Honest reading:** speed and cost are solved — 16–21 ms is ~8× faster
+than the board's leading systems (0.15–0.25 s) and ~40× faster than the
+2B path — but accuracy is the open problem (the board's leaders reach
+53–66 chance-corrected Intelligence; our checkpoints sit far below, so
+this is signal, not a podium). Pipeline, per-item raw responses and
+official summaries: [`docs/JEVBENCH_RESULTS.md`](docs/JEVBENCH_RESULTS.md)
++ [`results/jevbench/`](results/jevbench/).
 
 ## Quick start
 
