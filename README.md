@@ -74,6 +74,15 @@ this is signal, not a podium). Pipeline, per-item raw responses and
 official summaries: [`docs/JEVBENCH_RESULTS.md`](docs/JEVBENCH_RESULTS.md)
 + [`results/jevbench/`](results/jevbench/).
 
+**Three follow-ups tried, three honest negatives** (same harness): a
+20k-step warm-started head *overfits our distribution* (train-side val
+0.50→0.61 but official 36.7%→33.3%); swapping to the SFT core does not
+help (35.0%); swapping the corpus to real data (CLINC150+MNLI+SST-2, 21.8k)
+*loses family coverage* (28.5% — `tool_selection`/`routing` fall to 0/12).
+The binding constraint is **task-family and label-convention coverage**,
+not step count, core, or the real-vs-synthetic axis. Head2b (v1 corpus, 8k
+steps, base core) stays the best configuration.
+
 ## Quick start
 
 ```bash
