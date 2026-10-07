@@ -44,3 +44,16 @@ schema_validity = 1.0、operational_success = 1.0、charged $0。
 产物：`/root/jev_runs/{dv1b_easy,dv1b_orig,v2b_easy,v2b_orig,...}/`（官方
 results/raw/ledger/summary）；服务 `benchmarks`/`o1flash/jev_service_flash.py`；
 训练器 `benchmarks/decision_train.py`。
+
+## 温度缩放负结果（2026-10-07）：校准的域迁移动
+
+对 2B+头做了标准的 post-hoc 温度缩放（在自家决策语料 val 上 NLL 最优拟合）：
+- 自家 val（720 条）：T=**0.648**（锐化）、ECE 0.0544 → 0.0464、acc 0.514
+  —— 该分布上模型**欠自信**；
+- 官方 JevBench 复测（同权重 + T）：easy ECE **0.202 → 0.270**、
+  orig ECE **0.300 → 0.372** —— **变差**（accuracy 不变，0.396/0.347）。
+
+**结论**：温度在分布 A 拟合、到分布 B 会反向（A 欠自信需锐化、B 过自信需
+软化）——**校准轴不能靠自家数据拟合迁移**。已回退到 raw softmax 作为上报
+口径；温度缩放要生效需在同分布留出集上拟合（公开层拟合=需要披露的公开集
+开发，未做）。
