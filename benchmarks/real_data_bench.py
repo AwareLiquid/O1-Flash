@@ -36,9 +36,7 @@ def _fetch(name: str, cache_dir: str) -> str:
     path = os.path.join(cache_dir, name)
     if not os.path.exists(path):
         import requests
-        proxies = {"http": "http://127.0.0.1:9674",
-                   "https": "http://127.0.0.1:9674"}
-        r = requests.get(_BASE + name, proxies=proxies, timeout=120)
+        r = requests.get(_BASE + name, timeout=120)
         r.raise_for_status()
         with open(path, "wb") as f:
             f.write(r.content)
