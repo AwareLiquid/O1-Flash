@@ -47,3 +47,24 @@
 python -m benchmarks.baseline_gru_bank77 --steps 6000 --d 512
 python -m benchmarks.calibration_eval        # O1-Flash 200K checkpoint 校准评测
 ```
+
+
+## 读出替换 A/B（编码器冻结，2026-10-19）
+
+用 200K checkpoint 的**冻结编码器**特征，换掉 typed heads：
+
+| 读出 | acc | ECE (before→after) |
+|---|---|---|
+| typed heads（原模型） | 40.55% | 0.457 → 0.128 |
+| **mean-pool + 线性头** | **46.72%** | 0.155 → 0.044 (T=1.36) |
+| attention-pool + 线性头 | 45.03% | 0.178 → 0.063 (T=1.30) |
+
+**判定：编码器特征是主瓶颈**——换头只回收 **+6.1 点**（40.6→46.7），
+距 GRU 基线的 **79%** 仍有 32 点差距。即：
+1. typed heads 的读出确实有损（~6 点，可修）；
+2. 但液态编码器在静态意图分类上的**表征质量**远低于同数据 GRU
+   （46.7% vs 79%），这是主要矛盾。
+
+**建议**：决策线若要提精度，优先换/混编码器（液态核 → GRU/注意力，
+或 liquid O(1) 状态 + 注意力内容通路的混合）；读出用 mean-pool + 线性头
+（顺带 ECE 0.044 已很好）。
