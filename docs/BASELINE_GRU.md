@@ -117,3 +117,23 @@ python -m benchmarks.calibration_eval        # O1-Flash 200K checkpoint 校准�
 - 液态核的 O(1) 流式价值在本任务上不转化为精度，也不作为互补特征；
   若产品需要 O(1) 流式记忆，应作为**独立能力**（流式状态）而非分类主干；
 - 读出统一用 mean-pool + 线性（ECE 0.044）。
+
+## 决策 v2 落地（2026-10-19）
+
+按诊断结论实现并训练了 v2 决策模型（可加载的 checkpoint）：
+
+| 项 | 值 |
+|---|---|
+| 架构 | 字节级 GRU（d=512，1 层）+ mean-pool + 线性 77 头 |
+| 参数量 | 1.75M |
+| 训练 | banking77 全量（10,003 条），6,000 步，warmup 500 + cosine，CPU ~10 分钟 |
+| **准确率** | **78.28%**（vs O1-Flash 200K 步 40.8%，**+37.5 点**） |
+| **校准** | ECE 0.166 → **0.049**（T=1.779） |
+| 产物 | `checkpoints/decision_v2_gru.pt`（7.0MB：state_dict + cats + temperature + metrics） |
+| 接口 | `DecisionV2(ids, mask)` → logits；`predict_probs(model, texts, temperature)` |
+
+验证（重载 checkpoint）：acc 78.28%、T=1.779、77 类；
+样例 "How do I locate my card?" → `lost_or_stolen_card` ✓。
+
+复现：`python -m benchmarks.train_decision_v2 --steps 6000 --d 512`
+
